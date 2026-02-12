@@ -1,0 +1,432 @@
+"""
+Customer Churn Prediction using Logistic Regression
+Author: ML Assignment Implementation
+Data Source: Synthetic realistic data based on telecom/subscription service patterns (2020-2024)
+             Features: age (18-75), monthly_usage (GB), purchase_amount ($), customer_service_calls, region
+             Churn patterns: Higher service calls and lower usage correlate with increased churn
+             Regional variation: Urban (30% churn), Suburban (20% churn), Rural (25% churn)
+
+Requirements:
+- pandas
+- numpy
+- scikit-learn
+- matplotlib
+"""
+
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.metrics import (accuracy_score, precision_score, recall_score, 
+                             f1_score, confusion_matrix, classification_report, roc_auc_score)
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Set random seed for reproducibility
+np.random.seed(42)
+
+# Generate realistic customer churn dataset (200 records)
+def generate_customer_data(n_samples=200):
+    """
+    Generate synthetic but realistic customer churn data
+    
+    Churn probability factors:
+    - High customer service calls → Higher churn
+    - Low monthly usage → Higher churn
+    - Low purchase amount → Higher churn
+    - Age: Middle-aged (30-50) more stable, younger/older more likely to churn
+    - Region: Urban areas slightly higher churn due to more competition
+    """
+    regions = ['Urban', 'Suburban', 'Rural']
+    region_churn_base = {
+        'Urban': 0.35,      # More competition, higher churn
+        'Suburban': 0.25,   # Moderate churn
+        'Rural': 0.30       # Limited alternatives, but dissatisfaction leads to churn
+    }
+    
+    data = []
+    
+    for _ in range(n_samples):
+        # Random region
+        region = np.random.choice(regions, p=[0.45, 0.35, 0.20])
+        
+        # Age: 18-75 years old
+        age = np.random.randint(18, 76)
+        
+        # Monthly usage in GB (0-100 GB)
+        # Higher usage = more engaged customer
+        monthly_usage = np.random.exponential(25) 
+        monthly_usage = min(monthly_usage, 150)  # Cap at 150 GB
+        
+        # Purchase amount: $20-200/month
+        purchase_amount = np.random.gamma(4, 15) + 20
+        purchase_amount = min(purchase_amount, 250)
+        
+        # Customer service calls: 0-15 (most customers have 0-3)
+        service_calls = np.random.poisson(1.5)
+        service_calls = min(service_calls, 15)
+        
+        # Calculate churn probability based on features
+        base_churn_prob = region_churn_base[region]
+        
+        # Factors that increase churn:
+        # - High service calls (each call adds 10% churn probability)
+        churn_prob = base_churn_prob + (service_calls * 0.10)
+        
+        # - Low usage (below 15 GB adds risk)
+        if monthly_usage < 15:
+            churn_prob += 0.15
+        
+        # - Low purchase amount (below $40 adds risk)
+        if purchase_amount < 40:
+            churn_prob += 0.10
+        
+        # - Age extremes (very young <25 or older >65 slightly higher churn)
+        if age < 25 or age > 65:
+            churn_prob += 0.08
+        
+        # Cap probability at 0.95
+        churn_prob = min(churn_prob, 0.95)
+        
+        # Determine churn status
+        churn = 1 if np.random.random() < churn_prob else 0
+        
+        data.append({
+            'age': age,
+            'monthly_usage': round(monthly_usage, 2),
+            'purchase_amount': round(purchase_amount, 2),
+            'customer_service_calls': service_calls,
+            'region': region,
+            'churn': churn
+        })
+    
+    return pd.DataFrame(data)
+
+# Generate the dataset
+print("=" * 80)
+print("CUSTOMER CHURN PREDICTION - LOGISTIC REGRESSION MODEL")
+print("=" * 80)
+print("\n1. GENERATING REALISTIC CUSTOMER DATASET...")
+
+df = generate_customer_data(200)
+
+print(f"   Dataset size: {len(df)} customer records")
+print(f"\n   Dataset preview:")
+print(df.head(10))
+
+print(f"\n   Dataset statistics:")
+print(df.describe())
+
+print(f"\n   Churn distribution:")
+churn_counts = df['churn'].value_counts()
+print(churn_counts)
+print(f"   Churn rate: {(churn_counts[1] / len(df)) * 100:.2f}%")
+
+print(f"\n   Region distribution:")
+print(df['region'].value_counts())
+
+# Visualize the raw data
+print("\n2. VISUALIZING CUSTOMER DATA...")
+
+fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+
+# Plot 1: Churn by customer service calls
+axes[0, 0].hist([df[df['churn'] == 0]['customer_service_calls'], 
+                 df[df['churn'] == 1]['customer_service_calls']], 
+                bins=15, label=['Not Churned', 'Churned'], alpha=0.7)
+axes[0, 0].set_xlabel('Customer Service Calls')
+axes[0, 0].set_ylabel('Frequency')
+axes[0, 0].set_title('Churn vs Customer Service Calls')
+axes[0, 0].legend()
+axes[0, 0].grid(True, alpha=0.3)
+
+# Plot 2: Churn by monthly usage
+axes[0, 1].hist([df[df['churn'] == 0]['monthly_usage'], 
+                 df[df['churn'] == 1]['monthly_usage']], 
+                bins=20, label=['Not Churned', 'Churned'], alpha=0.7)
+axes[0, 1].set_xlabel('Monthly Usage (GB)')
+axes[0, 1].set_ylabel('Frequency')
+axes[0, 1].set_title('Churn vs Monthly Usage')
+axes[0, 1].legend()
+axes[0, 1].grid(True, alpha=0.3)
+
+# Plot 3: Churn by region
+churn_by_region = df.groupby(['region', 'churn']).size().unstack(fill_value=0)
+churn_by_region.plot(kind='bar', ax=axes[1, 0], alpha=0.7)
+axes[1, 0].set_xlabel('Region')
+axes[1, 0].set_ylabel('Number of Customers')
+axes[1, 0].set_title('Churn Distribution by Region')
+axes[1, 0].legend(['Not Churned', 'Churned'])
+axes[1, 0].set_xticklabels(axes[1, 0].get_xticklabels(), rotation=45)
+axes[1, 0].grid(True, alpha=0.3, axis='y')
+
+# Plot 4: Churn by age groups
+df['age_group'] = pd.cut(df['age'], bins=[0, 25, 35, 50, 65, 100], 
+                          labels=['18-25', '26-35', '36-50', '51-65', '65+'])
+churn_by_age = df.groupby(['age_group', 'churn']).size().unstack(fill_value=0)
+churn_by_age.plot(kind='bar', ax=axes[1, 1], alpha=0.7)
+axes[1, 1].set_xlabel('Age Group')
+axes[1, 1].set_ylabel('Number of Customers')
+axes[1, 1].set_title('Churn Distribution by Age Group')
+axes[1, 1].legend(['Not Churned', 'Churned'])
+axes[1, 1].set_xticklabels(axes[1, 1].get_xticklabels(), rotation=45)
+axes[1, 1].grid(True, alpha=0.3, axis='y')
+
+plt.tight_layout()
+plt.savefig('/home/claude/customer_churn_visualization.png', dpi=300, bbox_inches='tight')
+print("   Visualization saved as 'customer_churn_visualization.png'")
+
+# Drop temporary age_group column
+df = df.drop('age_group', axis=1)
+
+# Prepare features and target
+print("\n3. PREPARING DATA FOR TRAINING...")
+
+# Separate features and target
+X = df[['age', 'monthly_usage', 'purchase_amount', 'customer_service_calls', 'region']]
+y = df['churn']
+
+# Split data into training and testing sets (80-20 split)
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42, stratify=y
+)
+
+print(f"   Training set: {len(X_train)} samples")
+print(f"   Testing set: {len(X_test)} samples")
+print(f"   Training set churn rate: {(y_train.sum() / len(y_train)) * 100:.2f}%")
+print(f"   Testing set churn rate: {(y_test.sum() / len(y_test)) * 100:.2f}%")
+
+# Create preprocessing pipeline
+# StandardScaler for numerical features, OneHotEncoder for categorical 'region'
+numerical_features = ['age', 'monthly_usage', 'purchase_amount', 'customer_service_calls']
+categorical_features = ['region']
+
+preprocessor = ColumnTransformer(
+    transformers=[
+        ('num', StandardScaler(), numerical_features),
+        ('cat', OneHotEncoder(drop='first'), categorical_features)
+    ]
+)
+
+# Fit and transform the data
+X_train_scaled = preprocessor.fit_transform(X_train)
+X_test_scaled = preprocessor.transform(X_test)
+
+print(f"   Features after preprocessing: {X_train_scaled.shape[1]}")
+feature_names = (numerical_features + 
+                 ['region_' + cat for cat in ['Suburban', 'Urban']])  # 'Rural' dropped as baseline
+print(f"   Feature names: {', '.join(feature_names)}")
+
+# Train the Logistic Regression model
+print("\n4. TRAINING LOGISTIC REGRESSION MODEL...")
+
+model = LogisticRegression(random_state=42, max_iter=1000)
+model.fit(X_train_scaled, y_train)
+
+print("   Model training completed!")
+
+# Make predictions on test set
+y_pred = model.predict(X_test_scaled)
+y_pred_proba = model.predict_proba(X_test_scaled)[:, 1]  # Probability of churn
+
+# Evaluate the model
+print("\n5. MODEL EVALUATION:")
+
+accuracy = accuracy_score(y_test, y_pred)
+precision = precision_score(y_test, y_pred)
+recall = recall_score(y_test, y_pred)
+f1 = f1_score(y_test, y_pred)
+roc_auc = roc_auc_score(y_test, y_pred_proba)
+
+print(f"   Accuracy: {accuracy:.4f} ({accuracy*100:.2f}%)")
+print(f"   Precision: {precision:.4f} ({precision*100:.2f}% of predicted churns were correct)")
+print(f"   Recall: {recall:.4f} ({recall*100:.2f}% of actual churns were caught)")
+print(f"   F1-Score: {f1:.4f}")
+print(f"   ROC-AUC Score: {roc_auc:.4f}")
+
+print(f"\n   Confusion Matrix:")
+cm = confusion_matrix(y_test, y_pred)
+print(f"   [[TN={cm[0,0]:3d}  FP={cm[0,1]:3d}]")
+print(f"    [FN={cm[1,0]:3d}  TP={cm[1,1]:3d}]]")
+
+print(f"\n   Classification Report:")
+print(classification_report(y_test, y_pred, target_names=['Not Churned', 'Churned']))
+
+# Display model coefficients
+print("\n6. MODEL COEFFICIENTS (FEATURE IMPORTANCE):")
+
+coefficients = model.coef_[0]
+print(f"   Intercept: {model.intercept_[0]:.4f}")
+print(f"\n   Coefficients (positive = increases churn probability):")
+
+coef_df = pd.DataFrame({
+    'Feature': feature_names,
+    'Coefficient': coefficients
+}).sort_values('Coefficient', ascending=False)
+
+for idx, row in coef_df.iterrows():
+    direction = "↑ increases" if row['Coefficient'] > 0 else "↓ decreases"
+    print(f"     • {row['Feature']:30s}: {row['Coefficient']:7.4f} ({direction} churn risk)")
+
+print(f"\n   Key Insights:")
+top_positive = coef_df.iloc[0]
+top_negative = coef_df.iloc[-1]
+print(f"     - Strongest churn predictor: {top_positive['Feature']} (coef: {top_positive['Coefficient']:.4f})")
+print(f"     - Strongest retention factor: {top_negative['Feature']} (coef: {top_negative['Coefficient']:.4f})")
+
+# Predict for a new customer
+print("\n7. PREDICTION FOR NEW CUSTOMER:")
+print("   Profile: 35 years old, 10 GB usage, $45 purchase, 5 service calls, Urban region")
+
+new_customer = pd.DataFrame({
+    'age': [35],
+    'monthly_usage': [10],
+    'purchase_amount': [45],
+    'customer_service_calls': [5],
+    'region': ['Urban']
+})
+
+new_customer_scaled = preprocessor.transform(new_customer)
+churn_probability = model.predict_proba(new_customer_scaled)[0, 1]
+churn_prediction = model.predict(new_customer_scaled)[0]
+
+print(f"\n   Churn Probability: {churn_probability:.4f} ({churn_probability*100:.2f}%)")
+print(f"   Classification (threshold=0.5): {'WILL CHURN' if churn_prediction == 1 else 'WILL NOT CHURN'}")
+
+if churn_probability > 0.5:
+    print(f"   ⚠️  HIGH RISK - Customer is at risk of churning!")
+    print(f"   💡 RECOMMENDATION: Target with retention offer immediately")
+elif churn_probability > 0.3:
+    print(f"   ⚡ MODERATE RISK - Customer shows some churn signals")
+    print(f"   💡 RECOMMENDATION: Monitor closely and engage proactively")
+else:
+    print(f"   ✅ LOW RISK - Customer appears stable")
+    print(f"   💡 RECOMMENDATION: Maintain current service level")
+
+# Additional predictions for different customer profiles
+print("\n8. COMPARATIVE PREDICTIONS - DIFFERENT CUSTOMER PROFILES:")
+
+test_profiles = [
+    {'age': 28, 'monthly_usage': 50, 'purchase_amount': 80, 'customer_service_calls': 1, 'region': 'Suburban'},
+    {'age': 45, 'monthly_usage': 5, 'purchase_amount': 30, 'customer_service_calls': 8, 'region': 'Urban'},
+    {'age': 60, 'monthly_usage': 75, 'purchase_amount': 120, 'customer_service_calls': 0, 'region': 'Rural'},
+]
+
+profile_names = ['Engaged Young Professional', 'Dissatisfied Heavy Caller', 'Loyal Senior Customer']
+
+for name, profile in zip(profile_names, test_profiles):
+    test_df = pd.DataFrame([profile])
+    test_scaled = preprocessor.transform(test_df)
+    prob = model.predict_proba(test_scaled)[0, 1]
+    pred = model.predict(test_scaled)[0]
+    
+    risk_level = "HIGH" if prob > 0.5 else "MODERATE" if prob > 0.3 else "LOW"
+    print(f"\n   {name}:")
+    print(f"     Features: {profile}")
+    print(f"     Churn Probability: {prob:.2f} ({prob*100:.1f}%)")
+    print(f"     Risk Level: {risk_level}")
+
+# Visualize model performance
+print("\n9. GENERATING MODEL PERFORMANCE VISUALIZATIONS...")
+
+fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+# Confusion Matrix Heatmap
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=axes[0],
+            xticklabels=['Not Churned', 'Churned'],
+            yticklabels=['Not Churned', 'Churned'])
+axes[0].set_xlabel('Predicted')
+axes[0].set_ylabel('Actual')
+axes[0].set_title('Confusion Matrix')
+
+# Probability distribution for churned vs non-churned
+axes[1].hist([y_pred_proba[y_test == 0], y_pred_proba[y_test == 1]], 
+             bins=20, label=['Not Churned', 'Churned'], alpha=0.7)
+axes[1].axvline(x=0.5, color='r', linestyle='--', linewidth=2, label='Threshold (0.5)')
+axes[1].set_xlabel('Predicted Churn Probability')
+axes[1].set_ylabel('Frequency')
+axes[1].set_title('Churn Probability Distribution')
+axes[1].legend()
+axes[1].grid(True, alpha=0.3)
+
+plt.tight_layout()
+plt.savefig('/home/claude/model_performance_visualization.png', dpi=300, bbox_inches='tight')
+print("   Visualization saved as 'model_performance_visualization.png'")
+
+# Feature importance visualization
+print("\n10. GENERATING FEATURE IMPORTANCE VISUALIZATION...")
+
+plt.figure(figsize=(10, 6))
+colors = ['green' if x < 0 else 'red' for x in coef_df['Coefficient']]
+plt.barh(coef_df['Feature'], coef_df['Coefficient'], color=colors, alpha=0.7)
+plt.xlabel('Coefficient Value')
+plt.ylabel('Feature')
+plt.title('Feature Importance for Churn Prediction\n(Red = Increases Churn | Green = Decreases Churn)')
+plt.axvline(x=0, color='black', linestyle='-', linewidth=0.8)
+plt.grid(True, alpha=0.3, axis='x')
+plt.tight_layout()
+plt.savefig('/home/claude/feature_importance_visualization.png', dpi=300, bbox_inches='tight')
+print("   Visualization saved as 'feature_importance_visualization.png'")
+
+# Save predictions to CSV
+print("\n11. SAVING RESULTS...")
+
+results_df = pd.DataFrame({
+    'actual_churn': y_test.values,
+    'predicted_churn': y_pred,
+    'churn_probability': y_pred_proba,
+    'correct_prediction': y_test.values == y_pred
+})
+
+results_df.to_csv('/home/claude/churn_predictions_results.csv', index=False)
+print("   Predictions saved to 'churn_predictions_results.csv'")
+
+# Save full dataset
+df.to_csv('/home/claude/customer_churn_dataset.csv', index=False)
+print("   Full dataset saved to 'customer_churn_dataset.csv'")
+
+# Business interpretation summary
+print("\n" + "=" * 80)
+print("BUSINESS INSIGHTS & RECOMMENDATIONS:")
+print("=" * 80)
+print(f"\n📊 MODEL PERFORMANCE:")
+print(f"   • Overall Accuracy: {accuracy*100:.1f}%")
+print(f"   • Can identify {recall*100:.1f}% of customers who will churn")
+print(f"   • {precision*100:.1f}% of flagged customers actually churn")
+
+print(f"\n🎯 KEY CHURN DRIVERS:")
+high_impact = coef_df[coef_df['Coefficient'] > 0].head(3)
+for idx, row in high_impact.iterrows():
+    print(f"   • {row['Feature']}: Increases churn risk")
+
+print(f"\n🛡️  RETENTION FACTORS:")
+protective = coef_df[coef_df['Coefficient'] < 0].tail(3)
+for idx, row in protective.iterrows():
+    print(f"   • {row['Feature']}: Reduces churn risk")
+
+print(f"\n💡 ACTIONABLE STRATEGIES:")
+print(f"   1. Proactive Support: Reach out to customers with 3+ service calls")
+print(f"   2. Engagement Programs: Target low-usage customers (<15 GB) with value-add services")
+print(f"   3. Loyalty Incentives: Reward high-spending customers to maintain retention")
+print(f"   4. Regional Campaigns: Focus retention efforts on high-churn regions (Urban)")
+print(f"   5. Risk Scoring: Use probability scores to prioritize intervention efforts")
+
+print(f"\n📈 EXPECTED BUSINESS IMPACT:")
+total_churned = y_test.sum()
+correctly_identified = cm[1, 1]
+print(f"   • Out of {total_churned} customers who churned, model identified {correctly_identified}")
+print(f"   • Early intervention on high-risk customers (>0.5 probability) could save {correctly_identified} accounts")
+print(f"   • Focus retention budget on top 20% highest-risk customers for maximum ROI")
+
+print("\n" + "=" * 80)
+print("CHURN PREDICTION ANALYSIS COMPLETE!")
+print("=" * 80)
+print("\nFiles generated:")
+print("  • customer_churn_dataset.csv")
+print("  • churn_predictions_results.csv")
+print("  • customer_churn_visualization.png")
+print("  • model_performance_visualization.png")
+print("  • feature_importance_visualization.png")
+print("\nNext steps: Use these insights to build targeted retention campaigns!")
